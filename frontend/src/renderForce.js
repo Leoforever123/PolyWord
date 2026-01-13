@@ -107,12 +107,13 @@ export async function renderForce(svgEl, words, links, opts, onZoomK) {
   const nodes = words.map((d, i) => ({
     id: i,
     text: d.text,
-    weight: d.weight, // tooltip 用
+    weight: d.weight,
     size: d.size,
     rotate: 0,
     color: d3.schemeTableau10[i % 10],
     x: opts.w / 2 + (i % 9) * 6,
-    y: opts.h / 2 + (i % 7) * 6
+    y: opts.h / 2 + (i % 7) * 6,
+    pinned: false, // ✅ 新增：是否已 pin
   }));
 
   measureBBoxes(nodes, fontFamily);
@@ -141,7 +142,7 @@ export async function renderForce(svgEl, words, links, opts, onZoomK) {
   }
 
   // -----------------------
-  // 状态：hover + click 锁定（方案三）
+  // 状态：hover + click 锁定
   // -----------------------
   let hoverId = null;
   let selectedId = null;
@@ -181,7 +182,7 @@ export async function renderForce(svgEl, words, links, opts, onZoomK) {
     .attr("opacity", 0)
     .attr("filter", "url(#dragGlow)");
 
-  // tooltip（SVG 内，随 zoom/pan 自动移动）
+  // tooltip
   const tooltip = root.append("g")
     .style("pointer-events", "none")
     .style("display", showTooltip ? null : "none")
@@ -212,7 +213,7 @@ export async function renderForce(svgEl, words, links, opts, onZoomK) {
       .slice(0, 3);
 
     const lines = [
-      `${n.text}`,
+      `${n.text}${n.pinned ? "  [PIN]" : ""}`,
       `weight: ${n.weight ?? "-"}`,
       `degree: ${neigh.length}`,
       ...(top3.length ? ["top neighbors:"] : []),
@@ -227,7 +228,6 @@ export async function renderForce(svgEl, words, links, opts, onZoomK) {
         .text(line);
     });
 
-    // 计算 text bbox，设置背景
     const bb = tipText.node().getBBox();
     tipBg
       .attr("x", bb.x - 10)
@@ -241,7 +241,6 @@ export async function renderForce(svgEl, words, links, opts, onZoomK) {
     const w = (n.cbox?.w ?? n.bbox?.w ?? 0);
     const h = (n.cbox?.h ?? n.bbox?.h ?? 0);
 
-    // 放在右上角偏移一点（不遮字）
     const ox = n.x + w / 2 + 10;
     const oy = n.y - h / 2 - 10;
     tooltip.attr("transform", `translate(${ox},${oy})`);
@@ -265,7 +264,7 @@ export async function renderForce(svgEl, words, links, opts, onZoomK) {
     .style("paint-order", "stroke")
     .text(d => d.text);
 
-  // 点击空白清除锁定
+  // 点击空白清除锁定（不影响 pin）
   svg.on("click", () => {
     selectedId = null;
     draggingId = null;
@@ -340,12 +339,21 @@ export async function renderForce(svgEl, words, links, opts, onZoomK) {
       event.stopPropagation();
       selectedId = (selectedId === d.id) ? null : d.id;
       updateHighlight();
+    })
+    // 可选：双击单点解 pin（你不想要也可以删掉）
+    .on("dblclick", (event, d) => {
+      event.stopPropagation();
+      d.pinned = false;
+      d.fx = null;
+      d.fy = null;
     });
 
+  // -----------------------
   // simulation
+  // -----------------------
   const sim = d3.forceSimulation(nodes)
-    .velocityDecay(0.35)
-    .alphaDecay(0.06)
+    .velocityDecay(0.32)
+    .alphaDecay(0.055)
     .force("center", d3.forceCenter(opts.w / 2, opts.h / 2))
     .force("charge", d3.forceManyBody().strength(-18))
     .force("link", d3.forceLink(safeLinks).id(d => d.id)
@@ -354,8 +362,8 @@ export async function renderForce(svgEl, words, links, opts, onZoomK) {
         const s = (d.sim ?? 0);
         return Math.min(0.75, Math.max(0.05, s));
       }))
-    .force("rectCollide", forceRectCollide(0, 1.0, 3))
-    .force("bounds", forceBounds(opts.w, opts.h, 8))
+    .force("rectCollide", forceRectCollide(2, 1.05, 4))
+    .force("bounds", forceBounds(opts.w, opts.h, 8, 0.22))
     .on("tick", () => {
       link
         .attr("x1", d => d.source.x)
@@ -366,20 +374,75 @@ export async function renderForce(svgEl, words, links, opts, onZoomK) {
       labels
         .attr("transform", d => `translate(${d.x},${d.y}) rotate(${d.rotate})`);
 
-      // tooltip 跟随 active 节点（拖拽/布局变化时也更新位置）
       const activeId = getActiveId();
       if (activeId != null && showTooltip) positionTooltip(activeId);
     });
 
-  // drag（保持高亮 + ghost）
+  // -----------------------
+  // Unpin All（挂到 svgEl 上，main.js 可直接调用）
+  // -----------------------
+  function unpinAll() {
+    for (const n of nodes) {
+      n.pinned = false;
+      n.fx = null;
+      n.fy = null;
+    }
+    // 让系统稍微“热”一下，快速重新收敛
+    sim.alphaTarget(0.12).restart();
+    setTimeout(() => sim.alphaTarget(0), 250);
+    updateHighlight();
+  }
+  svgEl.__unpinAll = unpinAll;
+
+  // -----------------------
+  // 方案A：拖动时软拖拽 1-hop 邻居
+  // -----------------------
+  let dragPack = null; // { startX, startY, fixed: [{node, x, y, k, movable}] }
+
+  function buildDragPack(d) {
+    const neigh = [...(neighbors.get(d.id) ?? [])];
+
+    const fixed = [];
+    fixed.push({ node: d, x: d.x, y: d.y, k: 1, movable: true });
+
+    for (const id of neigh) {
+      const n = nodes[id];
+      if (!n) continue;
+
+      // ✅ 已 pin 的邻居不要被拖走（否则用户辛苦 pin 的也被你一把带走）
+      if (n.pinned) continue;
+
+      const s = getSim(d.id, id);
+      const k = 0.15 + 0.5 * Math.pow(Math.max(0, Math.min(1, s)), 0.8);
+      fixed.push({ node: n, x: n.x, y: n.y, k, movable: true });
+    }
+
+    return { startX: d.x, startY: d.y, fixed };
+  }
+
+  function applyDragPack(pack, mx, my) {
+    const dx = mx - pack.startX;
+    const dy = my - pack.startY;
+    for (const it of pack.fixed) {
+      if (!it.movable) continue;
+      it.node.fx = it.x + dx * it.k;
+      it.node.fy = it.y + dy * it.k;
+    }
+  }
+
+  // drag（拖完自动 pin 主节点）
   labels.call(
     d3.drag()
       .on("start", (event, d) => {
         svg.on(".zoom", null);
 
         draggingId = d.id;
-        if (!event.active) sim.alphaTarget(0.12).restart();
-        d.fx = d.x; d.fy = d.y;
+
+        if (!event.active) sim.alphaTarget(0.25).restart();
+
+        // 如果原来就是 pinned，先把它当作可拖动点：drag 时允许移动 pinned 点
+        // （用户拖动 pinned 点本身就是在改 pin 的位置）
+        dragPack = buildDragPack(d);
 
         d3.select(event.sourceEvent?.target).style("cursor", "grabbing");
 
@@ -395,7 +458,8 @@ export async function renderForce(svgEl, words, links, opts, onZoomK) {
       })
       .on("drag", (event, d) => {
         const [mx, my] = getWorldPointer(svgEl, event);
-        d.fx = mx; d.fy = my;
+
+        if (dragPack) applyDragPack(dragPack, mx, my);
 
         const w = d.cbox?.w ?? d.bbox?.w ?? 0;
         const h = d.cbox?.h ?? d.bbox?.h ?? 0;
@@ -403,7 +467,22 @@ export async function renderForce(svgEl, words, links, opts, onZoomK) {
       })
       .on("end", (event, d) => {
         if (!event.active) sim.alphaTarget(0);
-        d.fx = null; d.fy = null;
+
+        // 释放邻居的 fx/fy（主节点不释放，直接 pin）
+        if (dragPack) {
+          for (const it of dragPack.fixed) {
+            if (it.node === d) continue;
+            it.node.fx = null;
+            it.node.fy = null;
+          }
+        }
+        dragPack = null;
+
+        // ✅ 关键：拖完自动 pin 主节点（保持最终位置，不回弹）
+        const [mx, my] = getWorldPointer(svgEl, event);
+        d.fx = mx;
+        d.fy = my;
+        d.pinned = true;
 
         d3.select(event.sourceEvent?.target).style("cursor", "grab");
         dragRect.attr("opacity", 0);

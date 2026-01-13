@@ -1,7 +1,102 @@
 # 词云生成器 项目说明
 
-本项目是一个Web端词云应用，后端负责**解析输入**与**计算语义关联边**，前端负责**两种布局算法的渲染**（螺旋线词云、力导向语义图词云），并提供缩放/拖拽/高亮/Tooltip 等交互。
+本项目是一个Web端词云应用，后端负责**解析输入**与**计算语义关联边**，前端负责**三种布局算法的渲染**（螺旋线词云、高级螺旋线形状词云、力导向语义图词云），并提供缩放/拖拽/高亮/Tooltip 等交互。
 
+---
+
+## 快速开始
+
+### 环境要求
+
+- **Node.js**: >= 16.0.0
+- **Python**: >= 3.8
+- **包管理器**: npm 或 yarn
+
+### 安装与运行
+
+#### 1. 后端设置
+
+```bash
+cd backend
+
+# 创建虚拟环境（推荐）
+python -m venv .venv
+
+# 激活虚拟环境
+# Windows:
+.venv\Scripts\activate
+# Linux/Mac:
+source .venv/bin/activate
+
+# 安装依赖
+pip install fastapi uvicorn pandas openpyxl sentence-transformers
+
+# 启动后端服务（默认端口 8000）
+uvicorn main:app --reload --port 8000
+```
+
+后端服务将在 `http://localhost:8000` 启动。
+
+#### 2. 前端设置
+
+```bash
+cd frontend
+
+# 安装依赖
+npm install
+# 或使用 yarn
+yarn install
+
+# 启动开发服务器（默认端口 5173）
+npm run dev
+# 或
+yarn dev
+```
+
+前端应用将在 `http://localhost:5173` 启动。
+
+#### 4. 构建生产版本
+
+```bash
+cd frontend
+
+# 构建
+npm run build
+# 或
+yarn build
+
+# 预览构建结果
+npm run preview
+# 或
+yarn preview
+```
+
+构建产物位于 `frontend/dist/` 目录。
+
+### 项目结构
+
+```
+VCLproj/
+├── backend/              # FastAPI 后端
+│   └── main.py          # 主应用文件（API 路由、解析、语义边计算）
+├── frontend/            # Vite + D3.js 前端
+│   ├── src/
+│   │   ├── main.js      # 主应用逻辑、UI 控制
+│   │   ├── api.js       # 后端 API 调用封装
+│   │   ├── renderSpiral.js           # 基础螺旋线词云渲染器
+│   │   ├── renderSpiralAdvanced.js    # 高级螺旋线词云（形状约束）
+│   │   ├── renderForce.js             # 力导向布局渲染器
+│   │   ├── advancedCloud/            # 高级词云算法模块
+│   │   │   ├── advancedSpiralPlacer.js  # 像素级螺旋线放置算法
+│   │   │   ├── spriteWordMask.js        # 词文本栅格化（sprite 生成）
+│   │   │   └── maskUtils.js             # 形状 mask 工具（内置形状/图片 mask）
+│   │   └── forces/                    # 力导向自定义力
+│   │       ├── rectCollide.js         # 矩形碰撞力（AABB + 四叉树）
+│   │       └── bounds.js               # 边界约束力
+│   ├── package.json     # 前端依赖配置
+│   └── vite.config.js   # Vite 构建配置
+└── README.md            # 项目文档
+```
 
 ---
 
@@ -213,13 +308,12 @@
 
 ## 后端算法
 
-> 由于不同部署场景可能会替换模型/策略，以下描述的是项目中“后端职责”与常用实现方式；具体实现以 `api.py` / 路由文件为准。
 
 ### H. 输入解析与清洗（parseText / parseFile）
 
 **目标**：将用户输入（手写文本、CSV、XLSX）统一转成结构化词表 `[{text, weight}]`。
 
-常见步骤：
+步骤：
 
 1. **解析**：
    - 手写：按行切分；支持 `word` 或 `word,weight`
@@ -275,3 +369,50 @@
   - tooltip 展示解释
 
 ---
+
+## 高级螺旋线词云（Advanced Spiral Word Cloud）
+
+### 核心特性
+
+1. **形状约束（Shape Mask）**
+   - 支持内置形状：圆形、心形、圆角矩形、星形
+   - 支持上传 PNG 图片作为 mask（透明背景或黑白图）
+   - 通过 `shapePadding` 控制形状收缩/扩张
+
+2. **像素级精确放置（Pixel-perfect Placement）**
+   - 使用 OffscreenCanvas 将每个词栅格化为二进制 mask（sprite）
+   - 维护占用网格（occupancy grid）记录已放置词的像素位置
+   - 螺旋线搜索 + 像素级碰撞检测，确保无重叠
+
+3. **自适应字号调整（Adaptive Font Sizing）**
+   - 确保所有词都能显示（通过逐步缩小字号）
+   - 支持非线性字号压缩（`nonlinearPower`），平衡词频比例与形状填充
+   - 目标覆盖率控制（`targetCoverage`），通过重复小词填充空隙
+
+4. **贪婪放置策略（Greedy Placement）**
+   - 从大到小遍历所有词
+   - 对每个词：找到最宽的可用空间，尽量填满
+   - 如果放不下，逐步缩小字号直到能放置
+   - 保持词频偏序关系（大词始终比小词大）
+
+### 算法流程
+
+1. **Phase 1: 放置所有词**
+   - 按权重从大到小排序
+   - 对每个词进行二分搜索，找到能放置的最大字号
+   - 如果失败，逐步缩小字号（最小到 2px）直到成功
+
+2. **Phase 2: 填充剩余空间**
+   - 如果覆盖率 < 目标值（默认 85%）
+   - 重复小词（底部 30-40%）填充空隙
+   - 每次也找最宽空间并尽量填满
+
+### 关键参数
+
+- `wordPadding`: 词间距（推荐 0-2px，越小越紧密）
+- `shapePadding`: 形状边界留白（正数=收缩，负数=扩张，0=紧密）
+- `targetCoverage`: 目标覆盖率（0.6-0.95，推荐 0.85）
+- `nonlinearPower`: 非线性压缩系数（0.3-1.0，越小越压缩字号差异，推荐 0.5）
+- `maxTriesPerWord`: 每个词的最大尝试次数（默认 10000）
+- `spiralStep`: 螺旋线步长（默认 1px，越小搜索越密集）
+- `spiralTurns`: 螺旋线圈数（默认 200，越大搜索范围越大）

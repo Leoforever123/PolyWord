@@ -1,16 +1,26 @@
-// frontend/src/advancedCloud/spriteWordMask.js
-//
-// Rasterize a word into a binary pixel mask ("sprite") for pixel-perfect collision.
-// Intended for advanced word cloud placement (mask + occupancy grid).
-//
-// Sprite mask convention:
-// - Uint8Array length = spriteWidth * spriteHeight
-// - 1 means "ink pixel" (occupied by this word), 0 means empty
-//
-// Coordinate notes:
-// - Sprite is in its own coordinate system (0..w-1, 0..h-1)
-// - The caller places it at some (x, y) in the world canvas by aligning sprite's
-//   top-left to (x, y) (or use returned bbox/offsets as needed).
+/**
+ * 词文本栅格化模块（Sprite Word Mask）
+ * 
+ * 功能：将文本栅格化为二进制像素 mask，用于像素级精确碰撞检测
+ * 
+ * 核心概念：
+ * - Sprite：词的像素级表示，包含宽度、高度和二进制 mask
+ * - Mask：Uint8Array，长度 = width * height，1=文字像素，0=透明像素
+ * - 坐标系统：sprite 有自己的坐标系 (0..w-1, 0..h-1)，放置时左上角对齐到画布坐标 (x, y)
+ * 
+ * 使用场景：
+ * - 高级螺旋线词云：需要像素级精确放置，避免重叠
+ * - 形状约束词云：需要检查词的每个像素是否在允许区域内
+ * 
+ * 性能优化：
+ * - LRU 缓存：相同参数的词只栅格化一次
+ * - OffscreenCanvas：在后台线程栅格化，不阻塞主线程
+ * 
+ * 坐标约定：
+ * - Sprite 坐标系：(0, 0) 在左上角
+ * - 画布坐标系：放置时 sprite 的 (0, 0) 对齐到画布的 (x, y)
+ * - 旋转：围绕 sprite 中心旋转，然后计算新的边界框
+ */
 
 import { createOffscreenCanvas } from "./maskUtils.js";
 
@@ -43,12 +53,23 @@ function makeKey(params) {
 }
 
 /**
- * Simple LRU cache.
+ * LRU 缓存：最近最少使用缓存
+ * 
+ * 用途：缓存已栅格化的词 sprite，避免重复计算
+ * 
+ * 策略：
+ * - 使用 Map 保持插入顺序（最近使用的在末尾）
+ * - 访问时移动到末尾（刷新使用时间）
+ * - 超过容量时删除最久未使用的项（第一个）
+ * 
+ * 性能：
+ * - 相同字体、字号、文本的词只栅格化一次
+ * - 显著提升重复词的放置速度
  */
 class LRUCache {
   constructor(limit = 256) {
     this.limit = limit;
-    this.map = new Map(); // key -> value, insertion order = recency
+    this.map = new Map(); // key -> value，插入顺序 = 使用时间（末尾=最近）
   }
   get(key) {
     if (!this.map.has(key)) return undefined;
@@ -86,20 +107,29 @@ const DEFAULT_CACHE = new LRUCache(400);
  */
 
 /**
- * Rasterize a word into a sprite mask.
- *
- * @param {object} params
- * @param {string} params.text
- * @param {string} [params.fontFamily] e.g. "serif", "Arial"
- * @param {string|number} [params.fontWeight] e.g. 400/"bold"
- * @param {string} [params.fontStyle] e.g. "normal"/"italic"
- * @param {number} params.fontSize in px (CSS px in the final SVG; sprite uses DPR scaling)
- * @param {number} [params.rotate] degrees, typically 0 (you want all horizontal)
- * @param {number} [params.padding] extra empty pixels around ink (affects collision distance)
- * @param {number} [params.alphaThreshold] 0..255, default 16
- * @param {number} [params.devicePixelRatio] defaults to window.devicePixelRatio (clamped)
- * @param {LRUCache} [params.cache] optional custom cache
- * @returns {WordSprite}
+ * 获取词的 sprite（带缓存）
+ * 
+ * 功能：将文本栅格化为二进制 mask
+ * 
+ * 流程：
+ * 1. 检查缓存：如果相同参数的词已栅格化，直接返回
+ * 2. 栅格化：调用 rasterizeWordToMask 生成 sprite
+ * 3. 缓存：将结果存入 LRU 缓存
+ * 
+ * 缓存键：基于所有参数（文本、字体、字号、旋转、padding 等）
+ * 
+ * @param {object} params 栅格化参数
+ * @param {string} params.text 词文本
+ * @param {string} [params.fontFamily] 字体族，如 "serif", "Arial"
+ * @param {string|number} [params.fontWeight] 字重，如 400/"bold"
+ * @param {string} [params.fontStyle] 字体样式，如 "normal"/"italic"
+ * @param {number} params.fontSize 字号（CSS px）
+ * @param {number} [params.rotate] 旋转角度（度），通常为 0（水平）
+ * @param {number} [params.padding] 词周围额外空白像素（影响碰撞距离）
+ * @param {number} [params.alphaThreshold] 透明度阈值 0..255，默认 16
+ * @param {number} [params.devicePixelRatio] 设备像素比，默认 window.devicePixelRatio
+ * @param {LRUCache} [params.cache] 可选的自定义缓存
+ * @returns {WordSprite} sprite 对象
  */
 export function getWordSprite(params) {
   const cache = params.cache || DEFAULT_CACHE;
@@ -133,6 +163,25 @@ export function clearWordSpriteCache() {
   DEFAULT_CACHE.clear();
 }
 
+/**
+ * 栅格化词文本为二进制 mask
+ * 
+ * 算法流程：
+ * 1. 测量文本尺寸：使用小 canvas 测量文本的宽度和高度
+ * 2. 计算 sprite 尺寸：考虑旋转、padding，计算所需 canvas 大小
+ * 3. 绘制文本：在 OffscreenCanvas 上绘制文本（考虑旋转）
+ * 4. 提取 mask：从 canvas 的 alpha 通道提取二进制 mask
+ * 5. 计算边界框：找到文字像素的紧密边界框
+ * 
+ * 关键点：
+ * - 使用 OffscreenCanvas 避免影响主 canvas
+ * - 旋转时围绕文本中心旋转，然后计算新的边界框
+ * - 只提取非透明像素（alpha >= threshold）作为 mask
+ * - padding 在 mask 周围添加空白，用于控制词间距
+ * 
+ * @param {object} params 栅格化参数
+ * @returns {WordSprite} sprite 对象
+ */
 function rasterizeWordToMask(params) {
   const {
     text,
@@ -146,16 +195,17 @@ function rasterizeWordToMask(params) {
     devicePixelRatio = 1,
   } = params;
 
-  // Safety
+  // 参数安全处理
   const safeText = (text ?? "").toString();
   const safeSize = Math.max(1, Number(fontSize || 1));
-  const rot = ((rotate % 360) + 360) % 360;
+  const rot = ((rotate % 360) + 360) % 360; // 规范化角度到 [0, 360)
 
-  // 1) Measure text in a small canvas to estimate required sprite size
+  // 步骤 1: 测量文本尺寸
+  // 使用小 canvas 快速测量文本的宽度和高度
   const measCanvas = createOffscreenCanvas(16, 16);
   const mctx = measCanvas.getContext("2d");
-  mctx.textBaseline = "alphabetic";
-  mctx.textAlign = "left";
+  mctx.textBaseline = "alphabetic"; // 基线对齐方式
+  mctx.textAlign = "left"; // 左对齐
 
   const font = `${fontStyle} ${fontWeight} ${safeSize}px ${fontFamily}`;
   mctx.font = font;
@@ -183,17 +233,19 @@ function rasterizeWordToMask(params) {
     h = tmp;
   }
 
-  // Apply DPR scaling for more accurate mask at high zoom
-  const W = Math.max(8, Math.ceil(w * devicePixelRatio));
-  const H = Math.max(8, Math.ceil(h * devicePixelRatio));
+  // Use CSS px directly for coordinate consistency with canvas
+  // For better quality, we could use DPR scaling, but that complicates coordinate conversion
+  // Using CSS px ensures sprite coordinates match canvas coordinates exactly
+  const W = Math.max(8, Math.ceil(w));
+  const H = Math.max(8, Math.ceil(h));
 
   const canvas = createOffscreenCanvas(W, H);
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
   ctx.clearRect(0, 0, W, H);
-  ctx.save();
-  ctx.scale(devicePixelRatio, devicePixelRatio);
+  // No DPR scaling - use CSS px directly for coordinate consistency
 
+  ctx.save();
   // Drawing settings: render solid alpha
   ctx.fillStyle = "rgba(255,255,255,1)";
   ctx.textBaseline = "alphabetic";
@@ -254,8 +306,8 @@ function rasterizeWordToMask(params) {
     y1 = 0;
   }
 
-  // 3) Crop to tight bbox + re-add padding (in DPR pixels) so caller has margin control
-  const padPx = Math.max(0, Math.floor(padding * devicePixelRatio));
+  // 3) Crop to tight bbox + re-add padding (all in CSS px)
+  const padPx = Math.max(0, Math.floor(padding));
   const cropX0 = clamp(x0 - padPx, 0, W - 1);
   const cropY0 = clamp(y0 - padPx, 0, H - 1);
   const cropX1 = clamp(x1 + padPx, 0, W - 1);

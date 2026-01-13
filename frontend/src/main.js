@@ -35,11 +35,11 @@ app.innerHTML = `
   <div class="max-w-7xl mx-auto p-4 md:p-6">
     <header class="flex items-start md:items-center justify-between gap-4 mb-6">
       <div>
-        <h1 class="text-2xl md:text-3xl font-semibold tracking-tight">词云生成器 <span class="text-slate-500 font-normal">（产品风）</span></h1>
-        <p class="text-sm md:text-base text-slate-600">FastAPI：解析输入/计算语义边；前端：渲染与交互（zoom/drag/highlight/tooltip）。</p>
+        <h1 class="text-2xl md:text-3xl font-semibold tracking-tight">词云生成器</h1>
       </div>
       <div class="flex items-center gap-2">
         <button id="btnRender" class="px-3 py-2 rounded-xl bg-indigo-600 text-white hover:bg-indigo-500 transition text-sm">生成词云</button>
+        <button id="btnUnpinAll" class="px-3 py-2 rounded-xl border border-slate-200 hover:bg-white transition text-sm">Unpin All</button>
         <button id="btnDownload" class="px-3 py-2 rounded-xl border border-slate-200 hover:bg-white transition text-sm">导出SVG</button>
       </div>
     </header>
@@ -64,7 +64,7 @@ app.innerHTML = `
             <input type="radio" name="algo" value="spiral_advanced" />
             <div>
               <div class="text-sm font-semibold">高级螺旋线（形状词云）</div>
-              <div class="text-xs text-slate-500">mask 形状约束 + 像素级紧密排布（可回退）</div>
+              <div class="text-xs text-slate-500">形状约束 + 像素级精确排布</div>
             </div>
           </label>
 
@@ -139,25 +139,23 @@ app.innerHTML = `
               <option value="roundedRect">roundedRect</option>
               <option value="star">star</option>
             </select>
-            <p class="text-xs text-slate-500">提示：后续你也可以把 logo 轮廓做成 PNG 直接上传。</p>
           </div>
 
           <div id="imageShapeRow" class="space-y-2 hidden">
             <label class="text-sm font-medium text-slate-700">上传形状 PNG（mask）</label>
             <input id="maskInput" type="file" accept="image/png,image/jpeg,image/webp" class="block w-full text-sm" />
-            <p class="text-xs text-slate-500">推荐：透明背景 PNG；不透明黑白图也可（后续可加“亮度模式”。）</p>
           </div>
 
           <div class="grid grid-cols-2 gap-3">
             <div>
               <label class="text-sm font-medium text-slate-700">边界留白 shapePadding</label>
-              <input id="shapePadding" type="number" value="2" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-200" />
-              <p class="text-xs text-slate-500">正数：更收缩更留白；负数：更贴边</p>
+              <input id="shapePadding" type="number" value="0" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-200" />
+              <p class="text-xs text-slate-500">正数：更收缩更留白；负数：更贴边（0=紧密）</p>
             </div>
             <div>
               <label class="text-sm font-medium text-slate-700">词间距 wordPadding</label>
-              <input id="wordPadding" type="number" value="2" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-200" />
-              <p class="text-xs text-slate-500">越小越紧密（1~2 推荐）</p>
+              <input id="wordPadding" type="number" value="1" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-200" />
+              <p class="text-xs text-slate-500">越小越紧密（0~1 推荐，0=像素级紧密）</p>
             </div>
           </div>
 
@@ -165,6 +163,24 @@ app.innerHTML = `
             <span class="text-sm text-slate-700">debug：显示 mask 采样点</span>
             <input id="debugMask" type="checkbox" class="h-4 w-4" />
           </label>
+
+          <div class="pt-2 border-t border-slate-200 space-y-2">
+            <div class="text-sm font-medium text-slate-700">自适应调整（优先填满形状）</div>
+            <label class="flex items-center justify-between gap-3">
+              <span class="text-sm text-slate-700">启用自适应字号</span>
+              <input id="enableAdaptive" type="checkbox" checked class="h-4 w-4" />
+            </label>
+            <div>
+              <label class="text-sm font-medium text-slate-700">目标覆盖率（%）</label>
+              <input id="targetCoverage" type="number" value="85" min="60" max="95" step="5" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-200" />
+              <p class="text-xs text-slate-500">越高越填满形状（推荐 80-90%，参考图效果）</p>
+            </div>
+            <div>
+              <label class="text-sm font-medium text-slate-700">非线性压缩（0.3-1.0）</label>
+              <input id="nonlinearPower" type="number" value="0.5" min="0.3" max="1.0" step="0.1" class="mt-1 w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-200" />
+              <p class="text-xs text-slate-500">越小越压缩字号差异（0.5=强压缩，1.0=保持比例）</p>
+            </div>
+          </div>
         </div>
 
         <div class="space-y-2">
@@ -231,7 +247,7 @@ app.innerHTML = `
           <div class="text-xs text-slate-500">滚轮缩放 / 拖拽平移；力导向词可拖拽；hover/click 高亮</div>
         </div>
 
-        <div class="bg-slate-50 overflow-auto">
+        <div class="bg-slate-50 overflow-auto h-full">
           <svg id="stage" class="block"></svg>
         </div>
       </section>
@@ -275,10 +291,13 @@ function getOpts() {
     advanced: {
       shapeSource: getShapeSource(), // "builtin" | "image"
       builtinShape: document.querySelector("#builtinShape")?.value || "circle",
-      shapePadding: Number(document.querySelector("#shapePadding")?.value ?? 2) || 0,
-      wordPadding: Number(document.querySelector("#wordPadding")?.value ?? 2) || 2,
+      shapePadding: Number(document.querySelector("#shapePadding")?.value ?? 0) || 0,
+      wordPadding: Number(document.querySelector("#wordPadding")?.value ?? 1) || 1,
       debugMask: !!document.querySelector("#debugMask")?.checked,
       maskFile: document.querySelector("#maskInput")?.files?.[0] || null,
+      enableAdaptive: !!document.querySelector("#enableAdaptive")?.checked,
+      targetCoverage: Number(document.querySelector("#targetCoverage")?.value ?? 85) / 100,
+      nonlinearPower: Number(document.querySelector("#nonlinearPower")?.value ?? 0.5),
     },
 
     ui: {
@@ -337,6 +356,21 @@ function syncAdvancedPanelVisibility() {
   imageShapeRowEl.classList.toggle("hidden", src !== "image");
 }
 
+/**
+ * 主渲染函数：根据选择的算法渲染词云
+ * 
+ * 支持的算法：
+ * 1. spiral: 基础螺旋线词云（d3-cloud）
+ * 2. spiral_advanced: 高级螺旋线词云（形状约束 + 像素级放置）
+ * 3. force: 力导向布局（语义关系图）
+ * 
+ * 流程：
+ * 1. 获取用户输入（文本或文件）
+ * 2. 解析为词表 [{text, weight}]
+ * 3. 根据权重映射字号
+ * 4. 调用对应的渲染器
+ * 5. 更新状态信息
+ */
 async function render() {
   try {
     setStatus("处理中...");
@@ -354,6 +388,16 @@ async function render() {
     }
 
     const words = scaleFont(baseWords, opts.minFont, opts.maxFont);
+
+    if (!svgEl.hasAttribute("width") || svgEl.getAttribute("width") === "0") {
+      const container = svgEl.parentElement;
+      if (container) {
+        const containerW = container.clientWidth || opts.w || 1100;
+        const containerH = container.clientHeight || opts.h || 700;
+        svgEl.setAttribute("width", containerW);
+        svgEl.setAttribute("height", containerH);
+      }
+    }
 
     if (algo === "spiral") {
       setStatus("渲染中（螺旋线）...");
@@ -389,20 +433,39 @@ async function render() {
       await renderSpiralAdvanced(svgEl, words, {
         // 注意：高级模式自适应容器尺寸，这里不强依赖 opts.w/opts.h
         shape,
-        wordPadding: Math.max(0, Math.floor(adv.wordPadding ?? 2)),
+        wordPadding: Math.max(0, Math.floor(adv.wordPadding ?? 1)),
         rotate: 0, // 你要全横向；先固定为 0（后续如需支持旋转再加）
         debugMask: !!adv.debugMask,
+        adaptiveFontSize: adv.enableAdaptive !== false,
+        targetCoverage: adv.targetCoverage ?? 0.55,
+        nonlinearPower: adv.nonlinearPower ?? 0.7,
       }, (k) => updateZoomUI(k));
     } else {
-      setStatus("请求语义边（后端）...");
-      const { links } = await getSemanticLinks(baseWords, { topK: 3, threshold: 0.28 });
+      /**
+       * 力导向布局：限制词数量以避免性能问题
+       * 
+       * 原因：
+       * - 词数太多迭代慢，会出现重叠问题
+       */
+      const maxForceWords = 15;
+      const forceWords = words.slice(0, maxForceWords);
+      
+      setStatus(`请求语义边（后端，${forceWords.length}个词）...`);
+      const { links } = await getSemanticLinks(
+        baseWords.slice(0, maxForceWords), 
+        { topK: 3, threshold: 0.28 }
+      );
 
       setStatus("渲染中（力导向）...");
-      await renderForce(svgEl, words, links, opts, (k) => updateZoomUI(k));
+      await renderForce(svgEl, forceWords, links, opts, (k) => updateZoomUI(k));
     }
 
     resetZoom();
-    setStatus(`完成：${words.length} 个词`);
+    const finalWordCount = algo === "force" ? Math.min(words.length, 15) : words.length;
+    const wordCountMsg = algo === "force" && words.length > 15 
+      ? `${finalWordCount} 个词（已限制，原始${words.length}个）`
+      : `${finalWordCount} 个词`;
+    setStatus(`完成：${wordCountMsg}`);
   } catch (e) {
     console.error(e);
     setStatus(`错误：${e?.message ?? e}`);
@@ -411,23 +474,99 @@ async function render() {
 
 function loadExample() {
   const sample = [
-    ["机器学习", 98],
-    ["深度学习", 92],
-    ["自然语言处理", 86],
-    ["计算机视觉", 80],
-    ["优化", 77],
-    ["数值稳定性", 74],
-    ["图神经网络", 69],
-    ["扩散模型", 67],
+    // Core ML/DL concepts (high weight)
+    ["Machine Learning", 98],
+    ["Deep Learning", 92],
+    ["Neural Networks", 89],
+    ["Natural Language Processing", 86],
+    ["Computer Vision", 80],
+    ["Reinforcement Learning", 79],
+    ["Optimization", 77],
+    ["Gradient Descent", 76],
+    ["Backpropagation", 75],
+    ["Numerical Stability", 74],
+    ["Convolutional Neural Networks", 73],
+    ["Recurrent Neural Networks", 72],
+    ["Attention Mechanism", 71],
+    ["Graph Neural Networks", 69],
+    ["Diffusion Models", 67],
     ["Transformer", 65],
-    ["语义相似度", 60],
-    ["向量检索", 58],
-    ["回测", 46],
-    ["风险控制", 44],
-    ["Web应用", 36],
+    ["BERT", 64],
+    ["GPT", 63],
+    ["Semantic Similarity", 60],
+    ["Vector Retrieval", 58],
+    ["Embeddings", 57],
+    ["Feature Engineering", 56],
+    ["Hyperparameter Tuning", 55],
+    ["Model Training", 54],
+    ["Overfitting", 53],
+    ["Regularization", 52],
+    ["Dropout", 51],
+    ["Batch Normalization", 50],
+    
+    // Applications & Domains (medium-high weight)
+    ["Backtesting", 46],
+    ["Risk Control", 44],
+    ["Time Series Analysis", 43],
+    ["Anomaly Detection", 42],
+    ["Recommendation Systems", 41],
+    ["Sentiment Analysis", 40],
+    ["Image Classification", 39],
+    ["Object Detection", 38],
+    ["Web Application", 36],
+    ["Data Visualization", 35],
     ["D3.js", 34],
-    ["力导向布局", 30],
-    ["螺旋线算法", 28]
+    ["Interactive Dashboards", 33],
+    ["Real-time Processing", 32],
+    ["Distributed Systems", 31],
+    ["Force-directed Layout", 30],
+    ["Spiral Algorithm", 28],
+    
+    // Technical Implementation (medium weight)
+    ["TensorFlow", 48],
+    ["PyTorch", 47],
+    ["Scikit-learn", 45],
+    ["Pandas", 37],
+    ["NumPy", 29],
+    ["Data Preprocessing", 27],
+    ["Feature Selection", 26],
+    ["Cross Validation", 25],
+    ["Ensemble Methods", 24],
+    ["Random Forest", 23],
+    ["Support Vector Machines", 22],
+    ["Clustering", 21],
+    ["Dimensionality Reduction", 20],
+    ["Principal Component Analysis", 19],
+    ["K-means", 18],
+    
+    // Advanced Topics (medium-low weight)
+    ["Transfer Learning", 17],
+    ["Few-shot Learning", 16],
+    ["Meta Learning", 15],
+    ["Adversarial Training", 14],
+    ["Generative Adversarial Networks", 13],
+    ["Variational Autoencoders", 12],
+    ["Self-supervised Learning", 11],
+    ["Multi-task Learning", 10],
+    ["Federated Learning", 9],
+    ["Neural Architecture Search", 8],
+    ["AutoML", 7],
+    ["Explainable AI", 6],
+    ["Fairness", 5],
+    ["Bias Detection", 4],
+    ["Model Interpretability", 3],
+    
+    // Infrastructure & Tools (low weight)
+    ["GPU Acceleration", 2],
+    ["CUDA", 1],
+    ["Distributed Training", 1],
+    ["Model Serving", 1],
+    ["MLOps", 1],
+    ["Data Pipeline", 1],
+    ["Feature Store", 1],
+    ["Model Registry", 1],
+    ["A/B Testing", 1],
+    ["Monitoring", 1],
   ].map(([w, s]) => `${w},${s}`).join("\n");
   document.querySelector("#textInput").value = sample;
   setStatus("已加载示例（可直接生成）");
@@ -437,6 +576,11 @@ function loadExample() {
 document.querySelector("#btnRender").addEventListener("click", render);
 document.querySelector("#btnDownload").addEventListener("click", () => downloadSVG(svgEl));
 document.querySelector("#btnExample").addEventListener("click", loadExample);
+
+// ✅ Unpin All: renderForce 会挂载 svgEl.__unpinAll
+document.querySelector("#btnUnpinAll").addEventListener("click", () => {
+  svgEl.__unpinAll?.();
+});
 
 // Zoom controls
 document.querySelector("#zoomIn").addEventListener("click", () => {
@@ -474,7 +618,7 @@ for (const el of document.querySelectorAll("input[name=shapeSource]")) {
     render();
   });
 }
-for (const sel of ["#builtinShape", "#shapePadding", "#wordPadding", "#debugMask", "#maskInput"]) {
+for (const sel of ["#builtinShape", "#shapePadding", "#wordPadding", "#debugMask", "#maskInput", "#enableAdaptive", "#targetCoverage", "#nonlinearPower"]) {
   const el = document.querySelector(sel);
   if (!el) continue;
   el.addEventListener("change", () => render());

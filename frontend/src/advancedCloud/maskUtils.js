@@ -1,13 +1,28 @@
-// frontend/src/advancedCloud/maskUtils.js
-// Shape mask utilities for advanced word cloud placement.
-//
-// Mask convention:
-// - Uint8Array length = width * height
-// - 1 means "allowed/inside shape", 0 means "forbidden/outside shape"
-//
-// Notes:
-// - This file is framework-agnostic (no React/D3 dependency).
-// - Works in browser environment.
+/**
+ * 形状 Mask 工具模块
+ * 
+ * 功能：生成和管理形状 mask，用于高级词云的形状约束
+ * 
+ * Mask 约定：
+ * - Uint8Array，长度 = width * height
+ * - 1 = 允许放置（形状内部）
+ * - 0 = 禁止放置（形状外部）
+ * 
+ * 支持的形状来源：
+ * 1. 内置形状：圆形、心形、圆角矩形、星形
+ * 2. 图片 mask：PNG 图片（透明背景或黑白图）
+ * 
+ * 工具函数：
+ * - createBuiltInShapeMask: 创建内置形状 mask
+ * - loadImageMask: 从图片加载 mask
+ * - alphaToMask: 从 canvas alpha 通道提取 mask
+ * - luminanceToMask: 从 canvas 亮度提取 mask（用于黑白图）
+ * - erode/dilate: 形态学操作（收缩/扩张 mask）
+ * 
+ * 注意：
+ * - 框架无关（不依赖 React/D3）
+ * - 仅适用于浏览器环境（使用 Canvas API）
+ */
 
 function clamp(v, lo, hi) {
     return Math.max(lo, Math.min(hi, v));
