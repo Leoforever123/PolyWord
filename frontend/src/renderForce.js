@@ -109,7 +109,7 @@ export async function renderForce(svgEl, words, links, opts, onZoomK) {
     text: d.text,
     weight: d.weight, // tooltip 用
     size: d.size,
-    rotate: (Math.random() < opts.rotateProb ? 90 : 0),
+    rotate: 0,
     color: d3.schemeTableau10[i % 10],
     x: opts.w / 2 + (i % 9) * 6,
     y: opts.h / 2 + (i % 7) * 6

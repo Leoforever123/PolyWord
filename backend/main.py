@@ -7,10 +7,15 @@ import math
 
 app = FastAPI(title="WordCloud Backend", version="0.2.0")
 
-# 开发期：允许前端 Vite 跨域
+# 开发期：允许前端 Vite 跨域（5173/5174 都可能出现）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
